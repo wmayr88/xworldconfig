@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -138,13 +137,13 @@ class MainWindow(QMainWindow):
         scan_row.addStretch(1)
         layout.addLayout(scan_row)
 
+        self.progress_label = QLabel()
+        self.progress_label.setStyleSheet("font-family: monospace;")
+        self.progress_label.setVisible(False)
+        layout.addWidget(self.progress_label)
+
         layout.addWidget(self.tree, 1)
         self.setCentralWidget(central)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setFormat("Scanning objects: %v / %m tiles")
-        self.statusBar().addPermanentWidget(self.progress_bar)
 
         self._update_folder_label()
         if self.settings.custom_scenery_dir and Path(self.settings.custom_scenery_dir).is_dir():
@@ -350,9 +349,8 @@ class MainWindow(QMainWindow):
         self.tree.setEnabled(False)
         self.scan_button.setEnabled(False)
         self.scan_all_button.setEnabled(False)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setMaximum(0)  # busy indicator until the first progress signal reports a real total
-        self.progress_bar.setVisible(True)
+        self.progress_label.setText(_render_progress_bar(0, 0))
+        self.progress_label.setVisible(True)
 
         folder_paths = [f.path for f in self._known_folders]
         signals = _BulkScanSignals()
@@ -363,8 +361,7 @@ class MainWindow(QMainWindow):
         self._thread_pool.start(_BulkScanTask(folder_paths, signals))
 
     def _on_bulk_scan_progress(self, done: int, total: int) -> None:
-        self.progress_bar.setMaximum(total)
-        self.progress_bar.setValue(done)
+        self.progress_label.setText(_render_progress_bar(done, total))
 
     def _on_bulk_scan_finished(self, results: dict) -> None:
         for folder_path, result in results.items():
@@ -383,7 +380,7 @@ class MainWindow(QMainWindow):
 
     def _end_bulk_scan(self) -> None:
         self._bulk_scan_running = False
-        self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
         self.scan_button.setEnabled(True)
         self.scan_all_button.setEnabled(not self._ini_blocked)
         self.tree.setEnabled(not self._ini_blocked)
@@ -462,3 +459,15 @@ def _short_type_name(resource_path: str) -> str:
     if name.endswith((".obj", ".fac", ".net")):
         name = name.rsplit(".", 1)[0]
     return name
+
+
+_PROGRESS_BAR_WIDTH = 80
+
+
+def _render_progress_bar(done: int, total: int) -> str:
+    if total <= 0:
+        return "[" + "░" * _PROGRESS_BAR_WIDTH + "] scanning..."
+    fraction = min(1.0, done / total)
+    filled = round(_PROGRESS_BAR_WIDTH * fraction)
+    bar = "█" * filled + "░" * (_PROGRESS_BAR_WIDTH - filled)
+    return f"[{bar}] {done:,} / {total:,} tiles ({fraction * 100:.0f}%)"
