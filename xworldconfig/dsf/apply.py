@@ -20,7 +20,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from xworldconfig.dsf.backup import HashStore, hash_file, load_disabled_records, save_disabled_records
+from xworldconfig.dsf.backup import (
+    HashStore,
+    delete_disabled_records,
+    hash_file,
+    has_disabled_records,
+    load_disabled_records,
+    save_disabled_records,
+)
 from xworldconfig.dsf.concurrency import default_worker_count
 from xworldconfig.dsf.dsftool import DSFToolError, compile_text, decompile
 from xworldconfig.dsf.text_model import DsfText, Instance, kind_of_line, parse, render
@@ -100,6 +107,42 @@ def apply_folders(
         failed_tiles = [t for t in tiles if status_by_tile.get(t) == "failed"]
         results[folder] = ApplyResult(touched, restored, failed_tiles)
     return results
+
+
+def reset_folder(scenery_pack_dir: Path, on_progress: Callable[[int, int], None] | None = None) -> int:
+    return reset_folders([scenery_pack_dir], on_progress=on_progress)[scenery_pack_dir]
+
+
+def reset_folders(
+    scenery_pack_dirs: list[Path], on_progress: Callable[[int, int], None] | None = None
+) -> dict[Path, int]:
+    """Discards every disabled-type record for the given folders without
+    trying to restore them into the live tiles first - for the drift
+    "reset to enabled" path, where a stale sidecar can no longer be trusted
+    to correspond to the tile's new (externally updated) content. The live
+    files are left untouched: whatever caused the drift already restored
+    full content, so there is nothing left to splice back in - this only
+    ever deletes bookkeeping, never writes a tile."""
+    touched_by_folder = {
+        folder: [t for t in _list_tiles(folder) if has_disabled_records(t)] for folder in scenery_pack_dirs
+    }
+    all_touched = [tile for tiles in touched_by_folder.values() for tile in tiles]
+
+    total = len(all_touched)
+    completed = 0
+    if on_progress:
+        on_progress(completed, total)
+
+    hash_store = HashStore()
+    for tile in all_touched:
+        delete_disabled_records(tile)
+        hash_store.forget(tile)
+        completed += 1
+        if on_progress:
+            on_progress(completed, total)
+    hash_store.save()
+
+    return {folder: len(tiles) for folder, tiles in touched_by_folder.items()}
 
 
 def _list_tiles(scenery_pack_dir: Path) -> list[Path]:
