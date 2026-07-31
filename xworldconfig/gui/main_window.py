@@ -10,6 +10,8 @@ from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QAction, QBrush, QColor
 from PySide6.QtWidgets import (
     QFileDialog,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QTreeWidget,
@@ -71,14 +73,37 @@ class MainWindow(QMainWindow):
         choose_action = QAction("Choose Custom Scenery Folder...", self)
         choose_action.triggered.connect(self._choose_scenery_folder)
         toolbar.addAction(choose_action)
-        rescan_action = QAction("Rescan", self)
-        rescan_action.triggered.connect(self._rescan)
-        toolbar.addAction(rescan_action)
+        self.folder_label = QLabel()
+        toolbar.addWidget(self.folder_label)
 
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel(" X-World folder prefix: "))
+        self.freeware_prefix_edit = QLineEdit(self.settings.freeware_prefix)
+        self.freeware_prefix_edit.setMinimumWidth(200)
+        self.freeware_prefix_edit.editingFinished.connect(self._on_prefix_changed)
+        toolbar.addWidget(self.freeware_prefix_edit)
+        toolbar.addWidget(QLabel(" X-World Pro folder prefix: "))
+        self.pro_prefix_edit = QLineEdit(self.settings.pro_prefix)
+        self.pro_prefix_edit.setMinimumWidth(200)
+        self.pro_prefix_edit.editingFinished.connect(self._on_prefix_changed)
+        toolbar.addWidget(self.pro_prefix_edit)
+
+        toolbar.addSeparator()
+        scan_action = QAction("Scan", self)
+        scan_action.triggered.connect(self._rescan)
+        toolbar.addAction(scan_action)
+
+        self._update_folder_label()
         if self.settings.custom_scenery_dir and Path(self.settings.custom_scenery_dir).is_dir():
             self._rescan()
         else:
             self._choose_scenery_folder()
+
+    def _update_folder_label(self) -> None:
+        if self.settings.custom_scenery_dir:
+            self.folder_label.setText(f"  Custom Scenery: {self.settings.custom_scenery_dir}  ")
+        else:
+            self.folder_label.setText("  (no folder selected)  ")
 
     def _choose_scenery_folder(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Choose Custom Scenery folder")
@@ -86,30 +111,41 @@ class MainWindow(QMainWindow):
             return
         self.settings.custom_scenery_dir = chosen
         config.save(self.settings)
+        self._update_folder_label()
+        self._rescan()
+
+    def _on_prefix_changed(self) -> None:
+        freeware = self.freeware_prefix_edit.text().strip()
+        pro = self.pro_prefix_edit.text().strip()
+        if freeware == self.settings.freeware_prefix and pro == self.settings.pro_prefix:
+            return
+        self.settings.freeware_prefix = freeware
+        self.settings.pro_prefix = pro
+        config.save(self.settings)
         self._rescan()
 
     def _rescan(self) -> None:
         self.tree.clear()
+        self.tree.setEnabled(True)
         if not self.settings.custom_scenery_dir:
             return
         scenery_dir = Path(self.settings.custom_scenery_dir)
 
-        ini = None
         ini_path = scenery_dir / "scenery_packs.ini"
-        if ini_path.exists():
-            ini = SceneryPacksIni(ini_path)
-        else:
+        ini_missing = not ini_path.exists()
+        ini = None if ini_missing else SceneryPacksIni(ini_path)
+        if ini_missing:
             QMessageBox.warning(
                 self,
                 "scenery_packs.ini not found",
                 f"No scenery_packs.ini was found at:\n{ini_path}\n\n"
-                "Launch X-Plane at least once so it can generate this file, then rescan.",
+                "Launch X-Plane at least once so it can generate this file, then click Scan again.",
             )
 
         folders = discover(scenery_dir, self.settings.freeware_prefix, self.settings.pro_prefix, ini)
-        self._populate_tree(folders)
+        self._populate_tree(folders, ini_missing)
 
-    def _populate_tree(self, folders: list[SceneryFolder]) -> None:
+    def _populate_tree(self, folders: list[SceneryFolder], ini_missing: bool) -> None:
         self._populating = True
         try:
             missing_count = sum(1 for f in folders if f.ini_entry is None)
@@ -145,12 +181,25 @@ class MainWindow(QMainWindow):
                 edition_item.setExpanded(True)
 
             if missing_count:
+                self.tree.setEnabled(False)
                 self.statusBar().showMessage(
-                    f"{missing_count} folder(s) are installed but not yet in scenery_packs.ini - "
-                    "launch X-Plane once to register them, then rescan.",
+                    f"Blocked: {missing_count} folder(s) not yet in scenery_packs.ini. "
+                    "Launch X-Plane, then click Scan again.",
                 )
+                if not ini_missing:
+                    QMessageBox.warning(
+                        self,
+                        "Folders not registered in scenery_packs.ini",
+                        f"{missing_count} simHeaven folder(s) were found on disk but are not yet "
+                        "listed in scenery_packs.ini.\n\n"
+                        "X-Plane adds new entries to this file on launch, so it likely hasn't been "
+                        "started since these folders were installed.\n\n"
+                        "Launch X-Plane at least once, then click Scan again. The scenery list "
+                        "stays disabled until every discovered folder is accounted for.",
+                    )
             else:
-                self.statusBar().clearMessage()
+                self.tree.setEnabled(True)
+                self.statusBar().showMessage(f"Scan complete: {len(folders)} folder(s) found.", 5000)
         finally:
             self._populating = False
 
