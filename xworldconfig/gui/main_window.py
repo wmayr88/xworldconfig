@@ -249,10 +249,25 @@ class MainWindow(QMainWindow):
         since this app last wrote it (almost always a simHeaven update),
         before the user ever looks at that folder. Cheap - only folders
         with disabled_types entries are checked, only their tiles that
-        already have a .xwcdisabled sidecar are hashed, no decompiling."""
+        already have a .xwcdisabled sidecar are hashed, no decompiling.
+
+        Folders that don't exist at all (deleted, not just updated) carry no
+        useful config - those entries are dropped outright rather than left
+        as dead weight, so a later reinstall under the same name is treated
+        as brand new (fresh scan, fresh metadata) instead of surfacing a
+        stale disabled-type list with nothing left to compare it against."""
         if not self.settings.disabled_types or not self.settings.custom_scenery_dir:
             return
         scenery_dir = Path(self.settings.custom_scenery_dir)
+
+        missing = [name for name in self.settings.disabled_types if not (scenery_dir / name).is_dir()]
+        if missing:
+            for name in missing:
+                self.settings.disabled_types.pop(name, None)
+            config.save(self.settings)
+
+        if not self.settings.disabled_types:
+            return
         hash_store = HashStore()
 
         drifted: list[tuple[str, Path]] = []
