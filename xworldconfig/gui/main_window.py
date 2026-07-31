@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from xworldconfig import config
 from xworldconfig.dsf.inventory import ScanResult, scan_folder, scan_folders
+from xworldconfig.gui.formatting import render_progress_bar
 from xworldconfig.ini_parser import SceneryPacksIni
 from xworldconfig.scenery.discovery import SceneryFolder, discover
 
@@ -356,7 +357,7 @@ class MainWindow(QMainWindow):
         self.tree.setEnabled(False)
         self.scan_button.setEnabled(False)
         self.scan_all_button.setEnabled(False)
-        self.progress_label.setText(_render_progress_bar(0, 0))
+        self.progress_label.setText(render_progress_bar(0, 0))
         self.progress_label.setVisible(True)
 
         folder_paths = [f.path for f in folders]
@@ -368,7 +369,7 @@ class MainWindow(QMainWindow):
         self._thread_pool.start(_BulkScanTask(folder_paths, signals))
 
     def _on_bulk_scan_progress(self, done: int, total: int) -> None:
-        self.progress_label.setText(_render_progress_bar(done, total))
+        self.progress_label.setText(render_progress_bar(done, total))
 
     def _on_bulk_scan_finished(self, results: dict) -> None:
         for folder_path, result in results.items():
@@ -523,15 +524,3 @@ def _short_type_name(resource_path: str) -> str:
     if name.endswith((".obj", ".fac", ".net")):
         name = name.rsplit(".", 1)[0]
     return name
-
-
-_PROGRESS_BAR_WIDTH = 80
-
-
-def _render_progress_bar(done: int, total: int) -> str:
-    if total <= 0:
-        return "[" + "░" * _PROGRESS_BAR_WIDTH + "] scanning..."
-    fraction = min(1.0, done / total)
-    filled = round(_PROGRESS_BAR_WIDTH * fraction)
-    bar = "█" * filled + "░" * (_PROGRESS_BAR_WIDTH - filled)
-    return f"[{bar}] {done:,} / {total:,} tiles ({fraction * 100:.0f}%)"
