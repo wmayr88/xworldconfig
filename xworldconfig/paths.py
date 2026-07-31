@@ -3,10 +3,17 @@
 utilities/ folder, the per-OS DSFTool binary, and the settings file."""
 import platform
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 
+@lru_cache(maxsize=1)
 def app_root() -> Path:
+    # Memoized: it's a process-lifetime constant, and apply.py's concurrent
+    # worker threads all call this (via dsftool_path()) on every DSFTool
+    # invocation - repeatedly resolving it under heavy concurrency was
+    # observed to race CPython's internal realpath symlink-resolution cache
+    # and raise a spurious RecursionError, beyond just being wasted work.
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
