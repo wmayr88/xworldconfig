@@ -10,3 +10,5 @@ xworldconfig_cache.json
 xworldconfig_hashes.json
 *.egg-info/
 .claude/settings.local.json
+run.sh
+xworldconfig.desktop
