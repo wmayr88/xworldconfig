@@ -1,5 +1,5 @@
-"""Builds per-folder, per-type instance counts by decompiling every tile in a
-scenery pack folder, for display in the object-type tree.
+"""Builds per-folder, per-type instance counts by decompiling every tile in
+one or more scenery pack folders, for display in the object-type tree.
 
 This intentionally does not go through xworldconfig.dsf.text_model - that
 model retains every instance's exact source lines (needed later by apply.py
@@ -8,29 +8,44 @@ count needs. A single simHeaven footprints tile can decompile to several
 million lines, so this does a single streaming pass per tile and only keeps
 running counts, never the instance lines themselves.
 
-Unchanged tiles (by size + mtime) are served from xworldconfig.dsf.scan_cache
-instead of being re-decompiled, and tiles that do need scanning are processed
-concurrently with a thread pool - decompile is a subprocess call, so it
-releases the GIL while DSFTool runs, letting multiple tiles' decompiles
-overlap on multi-core machines."""
+Each type's count is split into active (currently present in the live tile)
+and disabled (present in the .xwcorig backup - see xworldconfig.dsf.backup -
+but no longer in the live tile, i.e. filtered out by xworldconfig.dsf.apply).
+Since no tile has a backup until apply.py actually disables something, this
+correctly reports 0 disabled everywhere today without any special-casing;
+it becomes accurate automatically once apply.py exists.
+
+Unchanged files (by size + mtime) are served from xworldconfig.dsf.scan_cache
+instead of being re-decompiled. scan_folders() flattens every tile (and any
+existing backup) across ALL requested folders into one shared thread pool
+and one shared progress count, rather than a separate pool per folder - this
+avoids the tail-end underutilization of re-spinning a pool per folder when
+scanning many folders at once, and gives a single, meaningful (completed,
+total) progress signal for a "scan everything" operation. scan_folder() is a
+thin single-folder wrapper around it, used for the lazy per-category scan
+triggered by expanding a tree item."""
 import concurrent.futures
 import os
 import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
+from xworldconfig.dsf.backup import backup_path
 from xworldconfig.dsf.dsftool import DSFToolError, decompile
 from xworldconfig.dsf.scan_cache import ScanCache
 
 _KINDS = ("OBJECT", "POLYGON", "NETWORK")
+_EMPTY_COUNTS: dict[str, dict[str, int]] = {kind: {} for kind in _KINDS}
 
 
 @dataclass
 class TypeCount:
     type_name: str
     kind: str  # "OBJECT" | "POLYGON" | "NETWORK"
-    count: int
+    active_count: int
+    disabled_count: int
 
 
 @dataclass
@@ -40,56 +55,120 @@ class ScanResult:
 
 
 def scan_folder(scenery_pack_dir: Path, max_workers: int | None = None) -> ScanResult:
-    nav_data_dir = scenery_pack_dir / "Earth nav data"
-    tiles = sorted(nav_data_dir.glob("**/*.dsf")) if nav_data_dir.is_dir() else []
+    return scan_folders([scenery_pack_dir], max_workers=max_workers)[scenery_pack_dir]
+
+
+def scan_folders(
+    scenery_pack_dirs: list[Path],
+    max_workers: int | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[Path, ScanResult]:
+    tiles_by_folder = {d: _list_tiles(d) for d in scenery_pack_dirs}
+
+    tile_backup: dict[Path, Path | None] = {}
+    all_paths: set[Path] = set()
+    for tiles in tiles_by_folder.values():
+        for tile in tiles:
+            all_paths.add(tile)
+            backup = backup_path(tile)
+            tile_backup[tile] = backup if backup.exists() else None
+            if tile_backup[tile] is not None:
+                all_paths.add(tile_backup[tile])
 
     cache = ScanCache()
-    totals: dict[str, dict[str, int]] = {kind: {} for kind in _KINDS}
-    failed_tiles: list[Path] = []
-    to_scan: list[Path] = []
     stats: dict[Path, tuple[int, float]] = {}
+    counts_by_path: dict[Path, dict[str, dict[str, int]]] = {}
+    to_scan: list[Path] = []
+    failed: set[Path] = set()
 
-    for tile in tiles:
-        st = tile.stat()
-        stats[tile] = (st.st_size, st.st_mtime)
-        cached = cache.get(tile, st.st_size, st.st_mtime)
+    for path in all_paths:
+        st = path.stat()
+        stats[path] = (st.st_size, st.st_mtime)
+        cached = cache.get(path, st.st_size, st.st_mtime)
         if cached is not None:
-            _merge(totals, cached)
+            counts_by_path[path] = cached
         else:
-            to_scan.append(tile)
+            to_scan.append(path)
+
+    total = len(all_paths)
+    completed = total - len(to_scan)
+    if on_progress:
+        on_progress(completed, total)
 
     if to_scan:
         workers = max_workers or (os.cpu_count() or 4)
         with tempfile.TemporaryDirectory(prefix="xworldconfig-scan-") as tmp_dir:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(_scan_tile, tile, Path(tmp_dir)): tile for tile in to_scan}
+                futures = {pool.submit(_scan_tile, path, Path(tmp_dir)): path for path in to_scan}
                 for future in concurrent.futures.as_completed(futures):
-                    tile = futures[future]
+                    path = futures[future]
                     try:
                         counts = future.result()
                     except DSFToolError:
-                        failed_tiles.append(tile)
-                        continue
-                    size, mtime = stats[tile]
-                    cache.put(tile, size, mtime, counts)
-                    _merge(totals, counts)
+                        failed.add(path)
+                        counts_by_path[path] = _EMPTY_COUNTS
+                    else:
+                        size, mtime = stats[path]
+                        cache.put(path, size, mtime, counts)
+                        counts_by_path[path] = counts
+                    completed += 1
+                    if on_progress:
+                        on_progress(completed, total)
 
-    cache.prune_missing(scenery_pack_dir, {str(t) for t in tiles})
+    for folder, tiles in tiles_by_folder.items():
+        existing = {str(t) for t in tiles}
+        existing |= {str(tile_backup[t]) for t in tiles if tile_backup[t] is not None}
+        cache.prune_missing(folder, existing)
     cache.save()
 
-    counts = [
-        TypeCount(type_name, kind, count)
-        for kind in _KINDS
-        for type_name, count in totals[kind].items()
-    ]
-    counts.sort(key=lambda c: (c.kind, -c.count, c.type_name))
-    return ScanResult(counts, failed_tiles)
+    return {
+        folder: _build_result(tiles, tile_backup, counts_by_path, failed)
+        for folder, tiles in tiles_by_folder.items()
+    }
 
 
-def _scan_tile(tile: Path, tmp_dir: Path) -> dict[str, dict[str, int]]:
+def _list_tiles(scenery_pack_dir: Path) -> list[Path]:
+    nav_data_dir = scenery_pack_dir / "Earth nav data"
+    return sorted(nav_data_dir.glob("**/*.dsf")) if nav_data_dir.is_dir() else []
+
+
+def _build_result(
+    tiles: list[Path],
+    tile_backup: dict[Path, Path | None],
+    counts_by_path: dict[Path, dict[str, dict[str, int]]],
+    failed: set[Path],
+) -> ScanResult:
+    active_totals: dict[str, dict[str, int]] = {kind: {} for kind in _KINDS}
+    original_totals: dict[str, dict[str, int]] = {kind: {} for kind in _KINDS}
+    failed_tiles: list[Path] = []
+
+    for tile in tiles:
+        if tile in failed:
+            failed_tiles.append(tile)
+            continue
+        live = counts_by_path.get(tile, _EMPTY_COUNTS)
+        _merge(active_totals, live)
+        backup = tile_backup[tile]
+        original = counts_by_path.get(backup, live) if backup is not None else live
+        _merge(original_totals, original)
+
+    type_counts = []
+    for kind in _KINDS:
+        names = set(active_totals[kind]) | set(original_totals[kind])
+        for name in names:
+            active = active_totals[kind].get(name, 0)
+            original = original_totals[kind].get(name, 0)
+            disabled = max(0, original - active)
+            type_counts.append(TypeCount(name, kind, active, disabled))
+
+    type_counts.sort(key=lambda c: (c.kind, -(c.active_count + c.disabled_count), c.type_name))
+    return ScanResult(type_counts, failed_tiles)
+
+
+def _scan_tile(path: Path, tmp_dir: Path) -> dict[str, dict[str, int]]:
     text_path = tmp_dir / f"{uuid.uuid4().hex}.txt"
     try:
-        decompile(tile, text_path)
+        decompile(path, text_path)
         return _count_tile(text_path)
     finally:
         text_path.unlink(missing_ok=True)

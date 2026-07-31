@@ -11,11 +11,13 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -24,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from xworldconfig import config
-from xworldconfig.dsf.inventory import ScanResult, scan_folder
+from xworldconfig.dsf.inventory import ScanResult, scan_folder, scan_folders
 from xworldconfig.ini_parser import SceneryPacksIni
 from xworldconfig.scenery.discovery import SceneryFolder, discover
 
@@ -56,6 +58,30 @@ class _ScanTask(QRunnable):
         self._signals.finished.emit(self._item, result)
 
 
+class _BulkScanSignals(QObject):
+    progress = Signal(int, int)  # completed, total
+    finished = Signal(object)  # dict[Path, ScanResult] - object, not dict: keys are Path, not str
+    failed = Signal(str)
+
+
+class _BulkScanTask(QRunnable):
+    def __init__(self, folder_paths: list[Path], signals: _BulkScanSignals):
+        super().__init__()
+        self._folder_paths = folder_paths
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            results = scan_folders(
+                self._folder_paths,
+                on_progress=lambda done, total: self._signals.progress.emit(done, total),
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            self._signals.failed.emit(str(exc))
+            return
+        self._signals.finished.emit(results)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -66,6 +92,11 @@ class MainWindow(QMainWindow):
         self._thread_pool = QThreadPool.globalInstance()
         self._populating = False
         self._active_scans: list[_ScanSignals] = []
+        self._active_bulk_scans: list[_BulkScanSignals] = []
+        self._bulk_scan_running = False
+        self._ini_blocked = False
+        self._known_folders: list[SceneryFolder] = []
+        self._category_items: dict[Path, QTreeWidgetItem] = {}
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Name", "Count"])
@@ -97,12 +128,23 @@ class MainWindow(QMainWindow):
         prefix_form.addRow("X-World Pro folder prefix:", self.pro_prefix_edit)
         layout.addLayout(prefix_form)
 
+        scan_row = QHBoxLayout()
         self.scan_button = QPushButton("Scan Folders")
         self.scan_button.clicked.connect(self._rescan)
-        layout.addWidget(self.scan_button)
+        scan_row.addWidget(self.scan_button)
+        self.scan_all_button = QPushButton("Scan All Objects")
+        self.scan_all_button.clicked.connect(self._on_scan_all_clicked)
+        scan_row.addWidget(self.scan_all_button)
+        scan_row.addStretch(1)
+        layout.addLayout(scan_row)
 
         layout.addWidget(self.tree, 1)
         self.setCentralWidget(central)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFormat("Scanning objects: %v / %m tiles")
+        self.statusBar().addPermanentWidget(self.progress_bar)
 
         self._update_folder_label()
         if self.settings.custom_scenery_dir and Path(self.settings.custom_scenery_dir).is_dir():
@@ -159,6 +201,8 @@ class MainWindow(QMainWindow):
     def _populate_tree(self, folders: list[SceneryFolder], ini_missing: bool) -> None:
         self._populating = True
         try:
+            self._known_folders = folders
+            self._category_items = {}
             missing_count = sum(1 for f in folders if f.ini_entry is None)
 
             by_edition: dict[str, list[SceneryFolder]] = {}
@@ -193,6 +237,8 @@ class MainWindow(QMainWindow):
 
                 edition_item.setExpanded(True)
 
+            self._ini_blocked = bool(missing_count)
+            self.scan_all_button.setEnabled(not self._ini_blocked)
             if missing_count:
                 self.tree.setEnabled(False)
                 self.statusBar().showMessage(
@@ -229,6 +275,7 @@ class MainWindow(QMainWindow):
         item = QTreeWidgetItem([label, ""])
         item.setData(0, _ROLE_KIND, "category")
         item.setData(0, _ROLE_FOLDER, folder)
+        self._category_items[folder.path] = item
 
         if folder.ini_entry is None:
             item.setText(1, "not in scenery_packs.ini")
@@ -276,7 +323,7 @@ class MainWindow(QMainWindow):
                     kind_item.setData(0, _ROLE_KIND, "type_group")
                     item.addChild(kind_item)
                 name = _short_type_name(type_count.type_name)
-                row = QTreeWidgetItem([name, f"{type_count.count:,}"])
+                row = QTreeWidgetItem([name, f"{type_count.active_count:,} ({type_count.disabled_count:,})"])
                 row.setData(0, _ROLE_KIND, "type")
                 kind_item.addChild(row)
             if kind_item is not None:
@@ -295,6 +342,51 @@ class MainWindow(QMainWindow):
         error_item.setData(0, _ROLE_KIND, "info")
         error_item.setForeground(0, QBrush(QColor("#c0392b")))
         item.addChild(error_item)
+
+    def _on_scan_all_clicked(self) -> None:
+        if self._bulk_scan_running or not self._known_folders:
+            return
+        self._bulk_scan_running = True
+        self.tree.setEnabled(False)
+        self.scan_button.setEnabled(False)
+        self.scan_all_button.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setMaximum(0)  # busy indicator until the first progress signal reports a real total
+        self.progress_bar.setVisible(True)
+
+        folder_paths = [f.path for f in self._known_folders]
+        signals = _BulkScanSignals()
+        signals.progress.connect(self._on_bulk_scan_progress)
+        signals.finished.connect(self._on_bulk_scan_finished)
+        signals.failed.connect(self._on_bulk_scan_failed)
+        self._active_bulk_scans.append(signals)  # keep alive until the queued callback fires
+        self._thread_pool.start(_BulkScanTask(folder_paths, signals))
+
+    def _on_bulk_scan_progress(self, done: int, total: int) -> None:
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(done)
+
+    def _on_bulk_scan_finished(self, results: dict) -> None:
+        for folder_path, result in results.items():
+            item = self._category_items.get(folder_path)
+            if item is not None:
+                self._on_scan_finished(item, result)
+        self._end_bulk_scan()
+        total_types = sum(len(r.counts) for r in results.values())
+        self.statusBar().showMessage(
+            f"Scan All Objects complete: {len(results)} folder(s), {total_types} type(s) found.", 5000
+        )
+
+    def _on_bulk_scan_failed(self, message: str) -> None:
+        self._end_bulk_scan()
+        QMessageBox.warning(self, "Scan All Objects failed", message)
+
+    def _end_bulk_scan(self) -> None:
+        self._bulk_scan_running = False
+        self.progress_bar.setVisible(False)
+        self.scan_button.setEnabled(True)
+        self.scan_all_button.setEnabled(not self._ini_blocked)
+        self.tree.setEnabled(not self._ini_blocked)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         if self._populating or column != 0:
