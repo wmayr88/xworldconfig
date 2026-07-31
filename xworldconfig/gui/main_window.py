@@ -110,32 +110,31 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        self.choose_button = QPushButton("Choose Custom Scenery Folder...")
-        self.choose_button.clicked.connect(self._choose_scenery_folder)
-        layout.addWidget(self.choose_button)
-
-        self.folder_label = QLabel()
-        layout.addWidget(self.folder_label)
-
-        prefix_form = QFormLayout()
-        prefix_form.setContentsMargins(0, 0, 0, 0)
+        settings_form = QFormLayout()
+        settings_form.setContentsMargins(0, 0, 0, 0)
+        self.folder_path_edit = QLineEdit()
+        self.folder_path_edit.setReadOnly(True)
+        settings_form.addRow("Custom Scenery Folder:", self.folder_path_edit)
         self.freeware_prefix_edit = QLineEdit(self.settings.freeware_prefix)
         self.freeware_prefix_edit.editingFinished.connect(self._on_prefix_changed)
-        prefix_form.addRow("X-World folder prefix:", self.freeware_prefix_edit)
+        settings_form.addRow("X-World folder prefix:", self.freeware_prefix_edit)
         self.pro_prefix_edit = QLineEdit(self.settings.pro_prefix)
         self.pro_prefix_edit.editingFinished.connect(self._on_prefix_changed)
-        prefix_form.addRow("X-World Pro folder prefix:", self.pro_prefix_edit)
-        layout.addLayout(prefix_form)
+        settings_form.addRow("X-World Pro folder prefix:", self.pro_prefix_edit)
+        layout.addLayout(settings_form)
 
-        scan_row = QHBoxLayout()
-        self.scan_button = QPushButton("Scan Folders")
+        button_row = QHBoxLayout()
+        self.choose_button = QPushButton("Custom Scenery Folder")
+        self.choose_button.clicked.connect(self._choose_scenery_folder)
+        button_row.addWidget(self.choose_button)
+        self.scan_button = QPushButton("Scan Folder")
         self.scan_button.clicked.connect(self._rescan)
-        scan_row.addWidget(self.scan_button)
+        button_row.addWidget(self.scan_button)
         self.scan_all_button = QPushButton("Scan All Objects")
         self.scan_all_button.clicked.connect(self._on_scan_all_clicked)
-        scan_row.addWidget(self.scan_all_button)
-        scan_row.addStretch(1)
-        layout.addLayout(scan_row)
+        button_row.addWidget(self.scan_all_button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
 
         self.progress_label = QLabel()
         self.progress_label.setStyleSheet("font-family: monospace;")
@@ -145,17 +144,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tree, 1)
         self.setCentralWidget(central)
 
-        self._update_folder_label()
+        self._update_folder_path_field()
         if self.settings.custom_scenery_dir and Path(self.settings.custom_scenery_dir).is_dir():
             self._rescan()
         else:
             self._choose_scenery_folder()
 
-    def _update_folder_label(self) -> None:
-        if self.settings.custom_scenery_dir:
-            self.folder_label.setText(f"  Custom Scenery: {self.settings.custom_scenery_dir}  ")
-        else:
-            self.folder_label.setText("  (no folder selected)  ")
+    def _update_folder_path_field(self) -> None:
+        self.folder_path_edit.setText(self.settings.custom_scenery_dir or "(no folder selected)")
 
     def _choose_scenery_folder(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Choose Custom Scenery folder")
@@ -163,7 +159,7 @@ class MainWindow(QMainWindow):
             return
         self.settings.custom_scenery_dir = chosen
         config.save(self.settings)
-        self._update_folder_label()
+        self._update_folder_path_field()
         self._rescan()
 
     def _on_prefix_changed(self) -> None:
@@ -191,7 +187,7 @@ class MainWindow(QMainWindow):
                 self,
                 "scenery_packs.ini not found",
                 f"No scenery_packs.ini was found at:\n{ini_path}\n\n"
-                "Launch X-Plane at least once so it can generate this file, then click Scan Folders again.",
+                "Launch X-Plane at least once so it can generate this file, then click Scan Folder again.",
             )
 
         folders = discover(scenery_dir, self.settings.freeware_prefix, self.settings.pro_prefix, ini)
@@ -242,7 +238,7 @@ class MainWindow(QMainWindow):
                 self.tree.setEnabled(False)
                 self.statusBar().showMessage(
                     f"Blocked: {missing_count} folder(s) not yet in scenery_packs.ini. "
-                    "Launch X-Plane, then click Scan Folders again.",
+                    "Launch X-Plane, then click Scan Folder again.",
                 )
                 if not ini_missing:
                     QMessageBox.warning(
@@ -252,7 +248,7 @@ class MainWindow(QMainWindow):
                         "listed in scenery_packs.ini.\n\n"
                         "X-Plane adds new entries to this file on launch, so it likely hasn't been "
                         "started since these folders were installed.\n\n"
-                        "Launch X-Plane at least once, then click Scan Folders again. The scenery list "
+                        "Launch X-Plane at least once, then click Scan Folder again. The scenery list "
                         "stays disabled until every discovered folder is accounted for.",
                     )
             else:
@@ -292,12 +288,12 @@ class MainWindow(QMainWindow):
     def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
         if item.data(0, _ROLE_KIND) != "category":
             return
-        if item.childCount() != 1 or item.child(0).data(0, _ROLE_KIND) != "placeholder":
-            return  # already scanned or already loaded
-        if item.child(0).text(0) == "Scanning...":
-            return  # scan already in flight
-
         folder: SceneryFolder = item.data(0, _ROLE_FOLDER)
+        self._start_lazy_scan(item, folder)
+
+    def _start_lazy_scan(self, item: QTreeWidgetItem, folder: SceneryFolder) -> bool:
+        if not self._is_unscanned(item):
+            return False
         item.child(0).setText(0, "Scanning...")
 
         signals = _ScanSignals()
@@ -305,6 +301,13 @@ class MainWindow(QMainWindow):
         signals.failed.connect(self._on_scan_failed)
         self._active_scans.append(signals)  # keep alive until the queued callback fires
         self._thread_pool.start(_ScanTask(item, folder.path, signals))
+        return True
+
+    def _is_unscanned(self, category_item: QTreeWidgetItem) -> bool:
+        if category_item.childCount() != 1:
+            return False
+        placeholder = category_item.child(0)
+        return placeholder.data(0, _ROLE_KIND) == "placeholder" and placeholder.text(0) != "Scanning..."
 
     def _on_scan_finished(self, item: QTreeWidgetItem, result: ScanResult) -> None:
         item.takeChildren()
@@ -343,7 +346,11 @@ class MainWindow(QMainWindow):
         item.addChild(error_item)
 
     def _on_scan_all_clicked(self) -> None:
-        if self._bulk_scan_running or not self._known_folders:
+        enabled_folders = [f for f in self._known_folders if f.ini_entry is not None and f.ini_entry.enabled]
+        self._start_bulk_scan(enabled_folders)
+
+    def _start_bulk_scan(self, folders: list[SceneryFolder]) -> None:
+        if self._bulk_scan_running or not folders:
             return
         self._bulk_scan_running = True
         self.tree.setEnabled(False)
@@ -352,7 +359,7 @@ class MainWindow(QMainWindow):
         self.progress_label.setText(_render_progress_bar(0, 0))
         self.progress_label.setVisible(True)
 
-        folder_paths = [f.path for f in self._known_folders]
+        folder_paths = [f.path for f in folders]
         signals = _BulkScanSignals()
         signals.progress.connect(self._on_bulk_scan_progress)
         signals.finished.connect(self._on_bulk_scan_finished)
@@ -371,12 +378,12 @@ class MainWindow(QMainWindow):
         self._end_bulk_scan()
         total_types = sum(len(r.counts) for r in results.values())
         self.statusBar().showMessage(
-            f"Scan All Objects complete: {len(results)} folder(s), {total_types} type(s) found.", 5000
+            f"Scan complete: {len(results)} folder(s), {total_types} type(s) found.", 5000
         )
 
     def _on_bulk_scan_failed(self, message: str) -> None:
         self._end_bulk_scan()
-        QMessageBox.warning(self, "Scan All Objects failed", message)
+        QMessageBox.warning(self, "Scan failed", message)
 
     def _end_bulk_scan(self) -> None:
         self._bulk_scan_running = False
@@ -406,31 +413,89 @@ class MainWindow(QMainWindow):
 
     def _on_tree_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
-        if item is None or item.data(0, _ROLE_KIND) != "region":
+        if item is None:
             return
+        kind = item.data(0, _ROLE_KIND)
+        if kind == "region":
+            self._show_region_context_menu(item, pos)
+        elif kind == "category":
+            self._show_category_context_menu(item, pos)
 
+    def _show_region_context_menu(self, region_item: QTreeWidgetItem, pos) -> None:
         menu = QMenu(self)
+        scan_action = menu.addAction("Scan Folders")
+        menu.addSeparator()
         disable_action = menu.addAction("Disable All")
         enable_action = menu.addAction("Enable All")
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        if chosen is disable_action:
-            self._set_region_enabled(item, False)
+        if chosen is scan_action:
+            self._scan_unscanned_in_region(region_item)
+        elif chosen is disable_action:
+            self._set_region_enabled(region_item, False)
         elif chosen is enable_action:
-            self._set_region_enabled(item, True)
+            self._set_region_enabled(region_item, True)
+
+    def _show_category_context_menu(self, category_item: QTreeWidgetItem, pos) -> None:
+        folder: SceneryFolder = category_item.data(0, _ROLE_FOLDER)
+        menu = QMenu(self)
+        scan_action = menu.addAction("Scan Folders")
+        disable_all_action = None
+        enable_all_action = None
+        if folder.category:
+            menu.addSeparator()
+            disable_all_action = menu.addAction(f"Disable all {folder.category}")
+            enable_all_action = menu.addAction(f"Enable all {folder.category}")
+        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        if chosen is scan_action:
+            if not self._start_lazy_scan(category_item, folder):
+                self.statusBar().showMessage(f"{category_item.text(0)} is already scanned.", 5000)
+        elif chosen is disable_all_action:
+            self._set_category_enabled_everywhere(folder, False)
+        elif chosen is enable_all_action:
+            self._set_category_enabled_everywhere(folder, True)
+
+    def _scan_unscanned_in_region(self, region_item: QTreeWidgetItem) -> None:
+        unscanned: list[SceneryFolder] = []
+        for i in range(region_item.childCount()):
+            category_item = region_item.child(i)
+            folder: SceneryFolder = category_item.data(0, _ROLE_FOLDER)
+            if folder is None or folder.ini_entry is None or not folder.ini_entry.enabled:
+                continue
+            if self._is_unscanned(category_item):
+                unscanned.append(folder)
+        if not unscanned:
+            self.statusBar().showMessage(f"Nothing to scan in {region_item.text(0)}.", 5000)
+            return
+        self._start_bulk_scan(unscanned)
 
     def _set_region_enabled(self, region_item: QTreeWidgetItem, enabled: bool) -> None:
-        registered: list[tuple[QTreeWidgetItem, SceneryFolder]] = []
+        pairs: list[tuple[QTreeWidgetItem, SceneryFolder]] = []
         for i in range(region_item.childCount()):
             category_item = region_item.child(i)
             folder: SceneryFolder = category_item.data(0, _ROLE_FOLDER)
             if folder is not None and folder.ini_entry is not None:
-                registered.append((category_item, folder))
-        if not registered:
+                pairs.append((category_item, folder))
+        self._bulk_set_enabled(pairs, enabled, region_item.text(0))
+
+    def _set_category_enabled_everywhere(self, folder: SceneryFolder, enabled: bool) -> None:
+        pairs: list[tuple[QTreeWidgetItem, SceneryFolder]] = []
+        for f in self._known_folders:
+            if f.edition == folder.edition and f.category == folder.category and f.ini_entry is not None:
+                item = self._category_items.get(f.path)
+                if item is not None:
+                    pairs.append((item, f))
+        description = f"'{folder.category}' ({_EDITION_LABELS[folder.edition]})"
+        self._bulk_set_enabled(pairs, enabled, description)
+
+    def _bulk_set_enabled(
+        self, pairs: list[tuple[QTreeWidgetItem, SceneryFolder]], enabled: bool, description: str
+    ) -> None:
+        if not pairs:
             return
 
         ini_path = Path(self.settings.custom_scenery_dir) / "scenery_packs.ini"
         ini = SceneryPacksIni(ini_path)
-        for _, folder in registered:
+        for _, folder in pairs:
             entry = ini.find_by_folder_name(folder.path.name)
             if entry is not None:
                 ini.set_enabled(entry, enabled)
@@ -438,15 +503,14 @@ class MainWindow(QMainWindow):
 
         self._populating = True
         try:
-            for category_item, folder in registered:
-                category_item.setCheckState(0, Qt.Checked if enabled else Qt.Unchecked)
+            for item, folder in pairs:
+                item.setCheckState(0, Qt.Checked if enabled else Qt.Unchecked)
                 folder.ini_entry.enabled = enabled
         finally:
             self._populating = False
 
         self.statusBar().showMessage(
-            f"{'Enabled' if enabled else 'Disabled'} {len(registered)} folder(s) in {region_item.text(0)}.",
-            5000,
+            f"{'Enabled' if enabled else 'Disabled'} {len(pairs)} folder(s) in {description}.", 5000
         )
 
 
