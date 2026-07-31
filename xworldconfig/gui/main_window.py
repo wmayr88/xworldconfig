@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         prefix_form.addRow("X-World Pro folder prefix:", self.pro_prefix_edit)
         layout.addLayout(prefix_form)
 
-        self.scan_button = QPushButton("Scan")
+        self.scan_button = QPushButton("Scan Folders")
         self.scan_button.clicked.connect(self._rescan)
         layout.addWidget(self.scan_button)
 
@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
                 self,
                 "scenery_packs.ini not found",
                 f"No scenery_packs.ini was found at:\n{ini_path}\n\n"
-                "Launch X-Plane at least once so it can generate this file, then click Scan again.",
+                "Launch X-Plane at least once so it can generate this file, then click Scan Folders again.",
             )
 
         folders = discover(scenery_dir, self.settings.freeware_prefix, self.settings.pro_prefix, ini)
@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
                 self.tree.setEnabled(False)
                 self.statusBar().showMessage(
                     f"Blocked: {missing_count} folder(s) not yet in scenery_packs.ini. "
-                    "Launch X-Plane, then click Scan again.",
+                    "Launch X-Plane, then click Scan Folders again.",
                 )
                 if not ini_missing:
                     QMessageBox.warning(
@@ -207,7 +207,7 @@ class MainWindow(QMainWindow):
                         "listed in scenery_packs.ini.\n\n"
                         "X-Plane adds new entries to this file on launch, so it likely hasn't been "
                         "started since these folders were installed.\n\n"
-                        "Launch X-Plane at least once, then click Scan again. The scenery list "
+                        "Launch X-Plane at least once, then click Scan Folders again. The scenery list "
                         "stays disabled until every discovered folder is accounted for.",
                     )
             else:
