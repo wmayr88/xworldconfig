@@ -7,15 +7,19 @@ counts for now."""
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QAction, QBrush, QColor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFormLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from xworldconfig import config
@@ -67,31 +71,35 @@ class MainWindow(QMainWindow):
         self.tree.setColumnWidth(0, 480)
         self.tree.itemExpanded.connect(self._on_item_expanded)
         self.tree.itemChanged.connect(self._on_item_changed)
-        self.setCentralWidget(self.tree)
 
-        toolbar = self.addToolBar("Main")
-        choose_action = QAction("Choose Custom Scenery Folder...", self)
-        choose_action.triggered.connect(self._choose_scenery_folder)
-        toolbar.addAction(choose_action)
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self.choose_button = QPushButton("Choose Custom Scenery Folder...")
+        self.choose_button.clicked.connect(self._choose_scenery_folder)
+        layout.addWidget(self.choose_button)
+
         self.folder_label = QLabel()
-        toolbar.addWidget(self.folder_label)
+        layout.addWidget(self.folder_label)
 
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel(" X-World folder prefix: "))
+        prefix_form = QFormLayout()
+        prefix_form.setContentsMargins(0, 0, 0, 0)
         self.freeware_prefix_edit = QLineEdit(self.settings.freeware_prefix)
-        self.freeware_prefix_edit.setMinimumWidth(200)
         self.freeware_prefix_edit.editingFinished.connect(self._on_prefix_changed)
-        toolbar.addWidget(self.freeware_prefix_edit)
-        toolbar.addWidget(QLabel(" X-World Pro folder prefix: "))
+        prefix_form.addRow("X-World folder prefix:", self.freeware_prefix_edit)
         self.pro_prefix_edit = QLineEdit(self.settings.pro_prefix)
-        self.pro_prefix_edit.setMinimumWidth(200)
         self.pro_prefix_edit.editingFinished.connect(self._on_prefix_changed)
-        toolbar.addWidget(self.pro_prefix_edit)
+        prefix_form.addRow("X-World Pro folder prefix:", self.pro_prefix_edit)
+        layout.addLayout(prefix_form)
 
-        toolbar.addSeparator()
-        scan_action = QAction("Scan", self)
-        scan_action.triggered.connect(self._rescan)
-        toolbar.addAction(scan_action)
+        self.scan_button = QPushButton("Scan")
+        self.scan_button.clicked.connect(self._rescan)
+        layout.addWidget(self.scan_button)
+
+        layout.addWidget(self.tree, 1)
+        self.setCentralWidget(central)
 
         self._update_folder_label()
         if self.settings.custom_scenery_dir and Path(self.settings.custom_scenery_dir).is_dir():
