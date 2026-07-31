@@ -27,3 +27,7 @@ def dsftool_path() -> Path:
 
 def config_file_path() -> Path:
     return app_root() / "xworldconfig.json"
+
+
+def scan_cache_path() -> Path:
+    return app_root() / "xworldconfig_cache.json"

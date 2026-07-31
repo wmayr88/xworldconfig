@@ -6,5 +6,6 @@ build/
 dist/
 *.spec
 xworldconfig.json
+xworldconfig_cache.json
 *.egg-info/
 .claude/settings.local.json
