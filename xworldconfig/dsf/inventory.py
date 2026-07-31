@@ -35,6 +35,7 @@ from xworldconfig.dsf.backup import has_disabled_records, load_disabled_records
 from xworldconfig.dsf.concurrency import default_worker_count
 from xworldconfig.dsf.dsftool import DSFToolError, decompile
 from xworldconfig.dsf.scan_cache import ScanCache
+from xworldconfig.dsf.text_model import kind_of_line
 
 _KINDS = ("OBJECT", "POLYGON", "NETWORK")
 _EMPTY_COUNTS: dict[str, dict[str, int]] = {kind: {} for kind in _KINDS}
@@ -143,7 +144,7 @@ def _build_result(
             for type_name, instances in load_disabled_records(tile).items():
                 if not instances:
                     continue
-                kind = _kind_of_line(instances[0][0])
+                kind = kind_of_line(instances[0][0])
                 disabled_totals[kind][type_name] = disabled_totals[kind].get(type_name, 0) + len(instances)
 
     type_counts = []
@@ -156,14 +157,6 @@ def _build_result(
 
     type_counts.sort(key=lambda c: (c.kind, -(c.active_count + c.disabled_count), c.type_name))
     return ScanResult(type_counts, failed_tiles)
-
-
-def _kind_of_line(line: str) -> str:
-    if line.startswith("BEGIN_POLYGON "):
-        return "POLYGON"
-    if line.startswith("BEGIN_SEGMENT "):
-        return "NETWORK"
-    return "OBJECT"
 
 
 def _scan_tile(path: Path, tmp_dir: Path) -> dict[str, dict[str, int]]:

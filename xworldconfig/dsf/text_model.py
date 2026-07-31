@@ -118,6 +118,17 @@ def parse(text: str) -> DsfText:
     return DsfText(header_lines, defs, instances)
 
 
+def kind_of_line(line: str) -> str:
+    """Which instance kind a raw source line belongs to, from its own text -
+    shared by inventory.py (counting) and apply.py (moving instances between
+    the live tile and the .xwcdisabled sidecar)."""
+    if line.startswith("BEGIN_POLYGON "):
+        return "POLYGON"
+    if line.startswith("BEGIN_SEGMENT "):
+        return "NETWORK"
+    return "OBJECT"
+
+
 def _consume_instance(lines: list[str], start: int, end_marker: str) -> tuple[list[str], int]:
     """Collects lines[start:] through the line starting with end_marker
     (inclusive), returning (block_lines, index_after_block). Used for both
