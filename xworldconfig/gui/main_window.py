@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTreeWidget,
@@ -71,6 +72,8 @@ class MainWindow(QMainWindow):
         self.tree.setColumnWidth(0, 480)
         self.tree.itemExpanded.connect(self._on_item_expanded)
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -311,6 +314,51 @@ class MainWindow(QMainWindow):
         ini.set_enabled(entry, enabled)
         ini.save()
         folder.ini_entry.enabled = enabled
+
+    def _on_tree_context_menu(self, pos) -> None:
+        item = self.tree.itemAt(pos)
+        if item is None or item.data(0, _ROLE_KIND) != "region":
+            return
+
+        menu = QMenu(self)
+        disable_action = menu.addAction("Disable All")
+        enable_action = menu.addAction("Enable All")
+        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        if chosen is disable_action:
+            self._set_region_enabled(item, False)
+        elif chosen is enable_action:
+            self._set_region_enabled(item, True)
+
+    def _set_region_enabled(self, region_item: QTreeWidgetItem, enabled: bool) -> None:
+        registered: list[tuple[QTreeWidgetItem, SceneryFolder]] = []
+        for i in range(region_item.childCount()):
+            category_item = region_item.child(i)
+            folder: SceneryFolder = category_item.data(0, _ROLE_FOLDER)
+            if folder is not None and folder.ini_entry is not None:
+                registered.append((category_item, folder))
+        if not registered:
+            return
+
+        ini_path = Path(self.settings.custom_scenery_dir) / "scenery_packs.ini"
+        ini = SceneryPacksIni(ini_path)
+        for _, folder in registered:
+            entry = ini.find_by_folder_name(folder.path.name)
+            if entry is not None:
+                ini.set_enabled(entry, enabled)
+        ini.save()
+
+        self._populating = True
+        try:
+            for category_item, folder in registered:
+                category_item.setCheckState(0, Qt.Checked if enabled else Qt.Unchecked)
+                folder.ini_entry.enabled = enabled
+        finally:
+            self._populating = False
+
+        self.statusBar().showMessage(
+            f"{'Enabled' if enabled else 'Disabled'} {len(registered)} folder(s) in {region_item.text(0)}.",
+            5000,
+        )
 
 
 def _kind_heading(kind: str) -> str:
