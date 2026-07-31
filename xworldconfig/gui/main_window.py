@@ -564,6 +564,9 @@ class MainWindow(QMainWindow):
             return
         self._bulk_scan_running = True
         self.tree.setEnabled(False)
+        self.choose_button.setEnabled(False)
+        self.freeware_prefix_edit.setEnabled(False)
+        self.pro_prefix_edit.setEnabled(False)
         self.scan_button.setEnabled(False)
         self.scan_all_button.setEnabled(False)
         self.progress_label.setText(render_progress_bar(0, 0))
@@ -598,6 +601,9 @@ class MainWindow(QMainWindow):
     def _end_bulk_scan(self) -> None:
         self._bulk_scan_running = False
         self.progress_label.setVisible(False)
+        self.choose_button.setEnabled(True)
+        self.freeware_prefix_edit.setEnabled(True)
+        self.pro_prefix_edit.setEnabled(True)
         self.scan_button.setEnabled(True)
         self.scan_all_button.setEnabled(not self._ini_blocked)
         self.tree.setEnabled(not self._ini_blocked)
