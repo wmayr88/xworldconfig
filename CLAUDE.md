@@ -57,6 +57,8 @@ xworldconfig/
 
 PyInstaller `--onedir` (not `--onefile` - avoids self-extract-on-every-launch), shipped as a folder with the executable, `utilities/` (per-OS DSFTool binaries), and the settings/cache JSON files all as siblings - fully portable, no installer, no OS app-data directory involved. On macOS this still means a `.app` bundle (idiomatic "portable" there), with config/utilities kept next to the bundle rather than inside `Contents/`.
 
+`utilities/NOTICE.md` carries the third-party attribution for the bundled DSFTool binaries (MIT/X11, Laminar Research's X-Plane Scenery Tools project) - keep it alongside `utilities/` in any packaged build, since MIT requires the copyright/permission notice to travel with redistributed copies.
+
 ## Scale characteristics (from real testing against the user's actual install)
 
 - ~118 folders discovered across both editions on a full simHeaven Pro + freeware install; up to ~130 category folders total.
