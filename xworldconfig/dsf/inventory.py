@@ -96,7 +96,7 @@ def scan_folders(
         on_progress(completed, total)
 
     if to_scan:
-        workers = max_workers or (os.cpu_count() or 4)
+        workers = max_workers or _default_worker_count()
         with tempfile.TemporaryDirectory(prefix="xworldconfig-scan-") as tmp_dir:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = {pool.submit(_scan_tile, path, Path(tmp_dir)): path for path in to_scan}
@@ -130,6 +130,15 @@ def scan_folders(
 def _list_tiles(scenery_pack_dir: Path) -> list[Path]:
     nav_data_dir = scenery_pack_dir / "Earth nav data"
     return sorted(nav_data_dir.glob("**/*.dsf")) if nav_data_dir.is_dir() else []
+
+
+def _default_worker_count() -> int:
+    """Leaves the rest of the machine some headroom instead of saturating
+    every core with DSFTool subprocesses - 2 cores free on smaller machines,
+    4 free on larger ones - while always leaving at least 1 worker."""
+    cpu_count = os.cpu_count() or 4
+    reserved = 4 if cpu_count > 8 else 2
+    return max(1, cpu_count - reserved)
 
 
 def _build_result(
