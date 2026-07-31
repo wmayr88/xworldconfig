@@ -186,6 +186,8 @@ class MainWindow(QMainWindow):
                     for folder in region_folders:
                         region_item.addChild(self._build_category_item(folder))
 
+                    region_item.setExpanded(True)
+
                 edition_item.setExpanded(True)
 
             if missing_count:

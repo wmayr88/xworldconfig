@@ -40,4 +40,12 @@ QTreeWidget {
 
 def apply_theme(app: QApplication) -> None:
     app.setStyle("Fusion")
+
+    font = app.font()
+    if font.pointSizeF() > 0:
+        font.setPointSizeF(font.pointSizeF() + 1)
+    elif font.pixelSize() > 0:
+        font.setPixelSize(round(font.pixelSize() * 1.1))
+    app.setFont(font)
+
     app.setStyleSheet(_STYLESHEET)
