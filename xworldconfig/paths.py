@@ -31,3 +31,7 @@ def config_file_path() -> Path:
 
 def scan_cache_path() -> Path:
     return app_root() / "xworldconfig_cache.json"
+
+
+def tile_hash_store_path() -> Path:
+    return app_root() / "xworldconfig_hashes.json"
