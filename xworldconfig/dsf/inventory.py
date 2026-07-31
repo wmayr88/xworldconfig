@@ -55,8 +55,12 @@ class ScanResult:
     failed_tiles: list[Path]
 
 
-def scan_folder(scenery_pack_dir: Path, max_workers: int | None = None) -> ScanResult:
-    return scan_folders([scenery_pack_dir], max_workers=max_workers)[scenery_pack_dir]
+def scan_folder(
+    scenery_pack_dir: Path,
+    max_workers: int | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> ScanResult:
+    return scan_folders([scenery_pack_dir], max_workers=max_workers, on_progress=on_progress)[scenery_pack_dir]
 
 
 def scan_folders(

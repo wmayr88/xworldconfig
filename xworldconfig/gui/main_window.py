@@ -52,6 +52,7 @@ _DISABLED_TYPE_COLOR = QColor("#c0392b")
 
 
 class _ScanSignals(QObject):
+    progress = Signal(object, int, int)  # QTreeWidgetItem, completed, total
     finished = Signal(object, object)  # QTreeWidgetItem, ScanResult
     failed = Signal(object, str)  # QTreeWidgetItem, error message
 
@@ -65,7 +66,10 @@ class _ScanTask(QRunnable):
 
     def run(self) -> None:
         try:
-            result = scan_folder(self._folder_path)
+            result = scan_folder(
+                self._folder_path,
+                on_progress=lambda done, total: self._signals.progress.emit(self._item, done, total),
+            )
         except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
             self._signals.failed.emit(self._item, str(exc))
             return
@@ -474,11 +478,21 @@ class MainWindow(QMainWindow):
         item.child(0).setText(0, "Scanning...")
 
         signals = _ScanSignals()
+        signals.progress.connect(self._on_lazy_scan_progress)
         signals.finished.connect(self._on_scan_finished)
         signals.failed.connect(self._on_scan_failed)
         self._active_scans.append(signals)  # keep alive until the queued callback fires
         self._thread_pool.start(_ScanTask(item, folder.path, signals))
         return True
+
+    def _on_lazy_scan_progress(self, item: QTreeWidgetItem, done: int, total: int) -> None:
+        if item.childCount() != 1 or item.child(0).data(0, _ROLE_KIND) != "placeholder":
+            return  # already finished/replaced by the time this queued signal arrived
+        placeholder = item.child(0)
+        if total <= 0:
+            placeholder.setText(0, "Scanning...")
+        else:
+            placeholder.setText(0, f"Scanning... ({done:,} / {total:,} tiles)")
 
     def _is_unscanned(self, category_item: QTreeWidgetItem) -> bool:
         if category_item.childCount() != 1:
