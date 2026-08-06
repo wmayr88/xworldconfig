@@ -55,6 +55,13 @@ class ScanResult:
     failed_tiles: list[Path]
 
 
+@dataclass
+class TileCount:
+    tile: Path
+    active_count: int
+    disabled_count: int
+
+
 def scan_folder(
     scenery_pack_dir: Path,
     max_workers: int | None = None,
@@ -122,6 +129,32 @@ def scan_folders(
         folder: _build_result(tiles, counts_by_path, failed)
         for folder, tiles in tiles_by_folder.items()
     }
+
+
+def tile_breakdown(scenery_pack_dir: Path, kind: str, type_name: str) -> list[TileCount]:
+    """Per-tile active/disabled counts for one type within one folder - a
+    testing/debugging aid, so it only reads already-cached data (ScanCache's
+    per-tile counts + any .xwcdisabled sidecars), no decompiling. That makes
+    it fast regardless of folder size, and it's always safe to call: a type
+    only ever appears in the tree after its folder has been scanned at least
+    once, so its tiles are guaranteed to already be in the cache. Tiles with
+    zero instances of this type (the vast majority, usually) are omitted."""
+    cache = ScanCache()
+    results: list[TileCount] = []
+    for tile in _list_tiles(scenery_pack_dir):
+        st = tile.stat()
+        cached = cache.get(tile, st.st_size, st.st_mtime)
+        active = cached.get(kind, {}).get(type_name, 0) if cached else 0
+
+        disabled = 0
+        if has_disabled_records(tile):
+            disabled = len(load_disabled_records(tile).get(type_name, []))
+
+        if active or disabled:
+            results.append(TileCount(tile, active, disabled))
+
+    results.sort(key=lambda tc: -(tc.active_count + tc.disabled_count))
+    return results
 
 
 def _list_tiles(scenery_pack_dir: Path) -> list[Path]:

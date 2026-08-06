@@ -35,8 +35,8 @@ from PySide6.QtWidgets import (
 from xworldconfig import config
 from xworldconfig.dsf.apply import ApplyResult, apply_folders, reset_folders
 from xworldconfig.dsf.backup import HashStore, has_disabled_records
-from xworldconfig.dsf.inventory import ScanResult, TypeCount, scan_folder, scan_folders
-from xworldconfig.gui.dialogs import DriftChoiceDialog, ProgressDialog
+from xworldconfig.dsf.inventory import ScanResult, TypeCount, scan_folder, scan_folders, tile_breakdown
+from xworldconfig.gui.dialogs import DriftChoiceDialog, ProgressDialog, TileBreakdownDialog
 from xworldconfig.gui.formatting import render_progress_bar
 from xworldconfig.ini_parser import SceneryPacksIni
 from xworldconfig.scenery.discovery import SceneryFolder, discover
@@ -739,15 +739,24 @@ class MainWindow(QMainWindow):
     def _show_type_context_menu(self, type_item: QTreeWidgetItem, pos) -> None:
         folder: SceneryFolder = type_item.data(0, _ROLE_FOLDER)
         type_name: str = type_item.data(0, _ROLE_TYPE_NAME)
+        type_count: TypeCount = type_item.data(0, _ROLE_TYPE_COUNT)
         short_name = _short_type_name(type_name)
         menu = QMenu(self)
+        tiles_action = menu.addAction("Show Tile Breakdown...")
+        menu.addSeparator()
         disable_action = menu.addAction(f"Disable '{short_name}' in all regions ({folder.category})")
         enable_action = menu.addAction(f"Enable '{short_name}' in all regions ({folder.category})")
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        if chosen is disable_action:
+        if chosen is tiles_action:
+            self._show_tile_breakdown(folder, type_count.kind, type_name, short_name)
+        elif chosen is disable_action:
             self._apply_type_names_everywhere(folder, {type_name}, False)
         elif chosen is enable_action:
             self._apply_type_names_everywhere(folder, {type_name}, True)
+
+    def _show_tile_breakdown(self, folder: SceneryFolder, kind: str, type_name: str, short_name: str) -> None:
+        tile_counts = tile_breakdown(folder.path, kind, type_name)
+        TileBreakdownDialog(self, short_name, tile_counts).exec()
 
     def _show_class_context_menu(self, group_item: QTreeWidgetItem, pos) -> None:
         category_item = group_item.parent()
