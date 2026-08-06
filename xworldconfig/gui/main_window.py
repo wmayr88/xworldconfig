@@ -206,6 +206,19 @@ class MainWindow(QMainWindow):
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
+        search_row = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Filter tree by name...")
+        self.search_edit.returnPressed.connect(self._on_filter_clicked)
+        search_row.addWidget(self.search_edit, 1)
+        self.filter_button = QPushButton("Filter")
+        self.filter_button.clicked.connect(self._on_filter_clicked)
+        search_row.addWidget(self.filter_button)
+        self.clear_filter_button = QPushButton("Clear Filter")
+        self.clear_filter_button.clicked.connect(self._on_clear_filter_clicked)
+        search_row.addWidget(self.clear_filter_button)
+        layout.addLayout(search_row)
+
         self.progress_label = QLabel()
         self.progress_label.setStyleSheet("font-family: monospace;")
         self.progress_label.setVisible(False)
@@ -369,6 +382,7 @@ class MainWindow(QMainWindow):
             self._write_in_progress = False
 
     def _rescan(self) -> None:
+        self.search_edit.clear()
         self.tree.clear()
         self.tree.setEnabled(True)
         if not self.settings.custom_scenery_dir:
@@ -899,6 +913,42 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{'Enabled' if enabled else 'Disabled'} {len(pairs)} folder(s) in {description}.", 5000
         )
+
+    def _on_filter_clicked(self) -> None:
+        term = self.search_edit.text().strip()
+        matched = self._apply_filter(term)
+        if term:
+            self.statusBar().showMessage(f"Filter '{term}': {matched} match(es).", 5000)
+
+    def _on_clear_filter_clicked(self) -> None:
+        self.search_edit.clear()
+        self._apply_filter("")
+
+    def _apply_filter(self, term: str) -> int:
+        term_lower = term.lower()
+        matched = 0
+        for i in range(self.tree.topLevelItemCount()):
+            matched += self._filter_item(self.tree.topLevelItem(i), term_lower)
+        return matched
+
+    def _filter_item(self, item: QTreeWidgetItem, term_lower: str) -> int:
+        """Hides item unless its own name contains term_lower or a
+        descendant's does, so a match stays visible in its tree context.
+        Returns the number of items (this one plus descendants) that
+        directly match by name."""
+        if not term_lower:
+            item.setHidden(False)
+            for i in range(item.childCount()):
+                self._filter_item(item.child(i), term_lower)
+            return 0
+
+        self_matches = term_lower in item.text(0).lower()
+        child_matches = sum(self._filter_item(item.child(i), term_lower) for i in range(item.childCount()))
+
+        item.setHidden(not (self_matches or child_matches))
+        if child_matches:
+            item.setExpanded(True)
+        return child_matches + (1 if self_matches else 0)
 
 
 def _kind_heading(kind: str) -> str:
