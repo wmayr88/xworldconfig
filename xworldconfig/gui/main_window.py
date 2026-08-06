@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
         self._ini_blocked = False
         self._known_folders: list[SceneryFolder] = []
         self._category_items: dict[Path, QTreeWidgetItem] = {}
+        self._pending_filter_term: str | None = None
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Name", "Count"])
@@ -569,9 +570,11 @@ class MainWindow(QMainWindow):
         error_item.setForeground(0, QBrush(QColor("#c0392b")))
         item.addChild(error_item)
 
+    def _enabled_folders(self) -> list[SceneryFolder]:
+        return [f for f in self._known_folders if f.ini_entry is not None and f.ini_entry.enabled]
+
     def _on_scan_all_clicked(self) -> None:
-        enabled_folders = [f for f in self._known_folders if f.ini_entry is not None and f.ini_entry.enabled]
-        self._start_bulk_scan(enabled_folders)
+        self._start_bulk_scan(self._enabled_folders())
 
     def _start_bulk_scan(self, folders: list[SceneryFolder]) -> None:
         if self._bulk_scan_running or not folders:
@@ -583,6 +586,9 @@ class MainWindow(QMainWindow):
         self.pro_prefix_edit.setEnabled(False)
         self.scan_button.setEnabled(False)
         self.scan_all_button.setEnabled(False)
+        self.search_edit.setEnabled(False)
+        self.filter_button.setEnabled(False)
+        self.clear_filter_button.setEnabled(False)
         self.progress_label.setText(render_progress_bar(0, 0))
         self.progress_label.setVisible(True)
 
@@ -607,8 +613,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Scan complete: {len(results)} folder(s), {total_types} type(s) found.", 5000
         )
+        if self._pending_filter_term is not None:
+            term = self._pending_filter_term
+            self._pending_filter_term = None
+            self._run_filter(term)
 
     def _on_bulk_scan_failed(self, message: str) -> None:
+        self._pending_filter_term = None
         self._end_bulk_scan()
         QMessageBox.warning(self, "Scan failed", message)
 
@@ -620,6 +631,9 @@ class MainWindow(QMainWindow):
         self.pro_prefix_edit.setEnabled(True)
         self.scan_button.setEnabled(True)
         self.scan_all_button.setEnabled(not self._ini_blocked)
+        self.search_edit.setEnabled(True)
+        self.filter_button.setEnabled(True)
+        self.clear_filter_button.setEnabled(True)
         self.tree.setEnabled(not self._ini_blocked)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
@@ -916,6 +930,21 @@ class MainWindow(QMainWindow):
 
     def _on_filter_clicked(self) -> None:
         term = self.search_edit.text().strip()
+        enabled = self._enabled_folders()
+        unscanned = [
+            f for f in enabled
+            if (item := self._category_items.get(f.path)) is not None and self._is_unscanned(item)
+        ]
+        if unscanned:
+            # Search every enabled folder's object types, not just ones already
+            # expanded - scan everything enabled first (already-scanned folders
+            # are near-instant from cache), then filter once that's done.
+            self._pending_filter_term = term
+            self._start_bulk_scan(enabled)
+        else:
+            self._run_filter(term)
+
+    def _run_filter(self, term: str) -> None:
         matched = self._apply_filter(term)
         if term:
             self.statusBar().showMessage(f"Filter '{term}': {matched} match(es).", 5000)
